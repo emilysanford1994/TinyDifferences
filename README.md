@@ -1,3 +1,7 @@
+@settings {
+  font-size: 100;
+}
+
 # The R Markdown file contains the code used to fit each of our models to discrimination task data.
 # All packages required to run the code are noted in the first chunk of the R Markdown file.
 
