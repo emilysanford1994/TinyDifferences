@@ -1,0 +1,191 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r Packages}
+library(ggplot2)
+library(Rsolnp)
+library(dplyr)
+library(plotrix)
+```
+
+
+##### MODELS #####
+
+
+```{r Model 1: SDT Model}
+# parameters
+w.start <- 1/3
+w.min <- 0
+w.max <- 3
+g.start <- 1/3
+g.min <- 0
+g.max <- 3
+
+# probability function 
+prob.SDT <- function(w,g,r){
+  p<-pnorm((r-1)/(w*sqrt(1+r^2)))
+  prob <- (1-g)*p+(g/2)
+  return(prob)
+}
+
+# objective function
+NLL.SDT <- function(subjectParams, trialParams,outcomes) {
+  p <- prob.SDT(subjectParams[1],subjectParams[2],trialParams)
+  probofobs <- log(p)*outcomes + log(1-p)*(1-outcomes)
+  negativeloglikelihood <- -sum(probofobs)
+  return(negativeloglikelihood)
+}
+
+# lower and upper bounds
+numParam.SDT <- 2
+lb.SDT <- c(w.min,g.min)
+ub.SDT <- c(w.max,g.max)
+
+# initial guesses
+subjectParams.SDT <- c(w.start,g.start) 
+```
+
+```{r Model 2: Guess Boundary Model}
+# parameters
+w.start <- 1/3
+w.min <- 0
+w.max <- 3
+g.start <- 1/3
+g.min <- 0
+g.max <- 3
+guessBound.start <- 0.05
+guessBound.min <- 0
+guessBound.max <- 3
+
+# probability function 
+prob.GuessBound <- function(w,g,guessBound,r){
+  p<-ifelse( r>(1+guessBound), pnorm(((r-guessBound)-1)/(w*sqrt(1+(r-guessBound)^2))), .5 )
+  prob <- (1-g)*p+(g/2)
+  return(prob)
+}
+
+# objective function
+NLL.GuessBound <- function(subjectParams, trialParams,outcomes) {
+  p <- prob.GuessBound(subjectParams[1],subjectParams[2],subjectParams[3], trialParams)
+  probofobs <- log(p)*outcomes + log(1-p)*(1-outcomes)
+  negativeloglikelihood <- -sum(probofobs)
+  return(negativeloglikelihood)
+}
+
+# lower and upper bounds
+numParam.GuessBound <- 3
+lb.GuessBound <- c(w.min,g.min,guessBound.min)
+ub.GuessBound <- c(w.max,g.max,guessBound.max)
+
+# initial guesses
+subjectParams.GuessBound <- c(w.start,g.start,guessBound.start) 
+```
+
+
+```{r Example plots}
+# Set parameter values
+testW <- .125
+testG <- 0.2
+testGuessBound <- .05
+
+# Generate example data
+exampleDat <- data.frame()
+for (ratio in seq(1,1.5,.01)){
+  pSDT <- prob.SDT(testW, testG, ratio)
+  pGuessBound <- prob.GuessBound(testW, testG, testJND, ratio)
+  exampleDat <- rbind(exampleDat, data.frame(ratio, pSDT, pGuessBound))
+}
+
+
+# Plots
+
+# SDT model
+ggplot(exampleDat, aes(x = ratio, y = pNoJND))+
+  theme_classic(base_size=15)+
+  ylab("Performance")+xlab("Ratio")+
+  scale_y_continuous(labels = scales::percent, limits = c(.5,1))+
+  geom_path(aes(x=ratio, y=pSDT), color="blue", size=2, alpha = .7)+
+  theme(aspect=1)+ggtitle("SDT Model")
+
+# Guess Bound Model
+ggplot(exampleDat, aes(x = ratio, y = pIntJND))+
+  theme_classic(base_size=15)+
+  ylab("Performance")+xlab("Ratio")+
+  scale_y_continuous(labels = scales::percent, limits = c(.5,1))+
+  geom_path(aes(x=ratio, y=pGuessBound), color="green", size= 2, alpha = .7)+
+  theme(aspect=1)+ggtitle("Guess Boundary Model")
+```
+
+
+
+##### Model fitting on sample data #####
+
+```{r Load Example Data}
+data <- read.csv("alldata_cleaned.csv")
+```
+
+```{r Group model fits}
+# You can fit each subject separately with each model, or collapse across all subjects and fit them together as one subject.
+# For this demo, we are fitting all subjects together.
+
+# fitting with SDT model
+all.SDT <- solnp(subjectParams.SDT,NLL.SDT,ineqfun=NULL,ineqLB=NULL,ineqUB=NULL,LB=lb.SDT,UB=ub.SDT,control=NULL,
+                 trialParams=data$NumberRatio,outcomes=data$Accuracy)
+
+# fitting with Intuitive JND Model
+all.GuessBound <- solnp(subjectParams.GuessBound,NLL.GuessBound,ineqfun=NULL,ineqLB=NULL,ineqUB=NULL,
+                        LB=lb.GuessBound,UB=ub.GuessBound,control=NULL,
+                        trialParams=data$NumberRatio,outcomes=data$Accuracy)
+
+
+# Calculating measure of fit: Bayesian Information Criterion (lower values better)
+
+# BIC  = 2 * NLL + (# model parameters) * log(# observations)
+BIC.SDT <- 2*tail(all.SDT$values, n=1) + numParam.SDT*log(nrow(data))
+BIC.GuessBound <- 2*tail(all.GuessBound$values, n=1) + numParam.GuessBound*log(nrow(data))
+
+print("BIC Values")
+print(paste("SDT Model:", BIC.SDT))
+print(paste("Guess Boundary Model:", BIC.GuessBound))
+
+# Model parameters:
+print("Model Parameters")
+print("SDT Model:")
+all.SDT$pars# w, g
+print("Guess Boundary Model:")
+all.GuessBound$pars # w, g, jnd
+
+```
+
+```{r Plot of group model fits}
+# Calculate average performance per ratio across subjects
+plotData <- data%>%
+  group_by(NumberRatio)%>%
+  summarise(meanResp = mean(Accuracy), seResp = std.error(Accuracy))
+#generate data for lines
+groupModels <- data.frame()
+for (ratio in seq(1,1.5,.01)){
+  pSDT <- prob.SDT(all.SDT$pars[1], all.SDT$pars[2], ratio)
+  pGuessBound <- prob.GuessBound(all.GuessBound$pars[1], all.GuessBound$pars[2], all.GuessBound$pars[3], ratio)
+  groupModels <- rbind(groupModels, data.frame(ratio, pSDT, pGuessBound))
+}
+
+# Plot
+
+# Blue line = SDT Model
+# Green dashed line = Guess Boundary Model (almost totally overlaps with blue)
+ggplot(plotData, aes(x = NumberRatio, y = meanResp))+
+  geom_path(data = groupModels, aes(x=ratio, y=pSDT), color="blue", size=1.5, alpha = .8)+
+  geom_path(data = groupModels, aes(x=ratio, y=pGuessBound), color="green", size=1.5,alpha = .8, linetype = 2)+
+  geom_point(alpha = .5, size=7, aes(colour = factor(NumberRatio)))+ 
+  theme_classic(base_size=20)+
+  ylab("% Correct")+xlab("Ratio")+
+  geom_linerange(aes(x=NumberRatio+.02,ymin = meanResp - seResp, ymax = meanResp+seResp,
+                     colour=factor(NumberRatio)),size=1)+
+  geom_hline(yintercept=.5, linetype = 3, colour="gray", size=1)+
+  scale_color_manual(values = rev(rainbow(7)))+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position = "none", aspect = .8)
+```
